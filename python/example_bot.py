@@ -148,9 +148,11 @@ class Bot:
             best = None
             for p in obs.get("pickups", []):
                 d = distance2(p["pos"], (x, y))
-                if (p["kind"] != "gun" and p["kind"] not in held and d < 40.0
-                        and distance2(p["pos"], (cx, cy)) < r - 15.0 and (best is None or d < best[0])):
-                    best = (d, p)
+                # Weapons win fights: go well out of our way for one (laser first), not just 40 m.
+                rank = {"laser": 0.0, "lightning": 25.0, "mortar": 45.0}.get(p["kind"], 99.0)
+                if (p["kind"] != "gun" and p["kind"] not in held and d < 110.0
+                        and distance2(p["pos"], (cx, cy)) < r - 15.0 and (best is None or d + rank < best[0])):
+                    best = (d + rank, p)
             if best is not None:
                 return (best[1]["pos"][0], best[1]["pos"][1]), False
         if self.spot is None:
@@ -333,7 +335,8 @@ class Bot:
         nearest_d = distance2(nearest["pos"], (x, y)) if nearest is not None else float("inf")
         recently_hit = t - self.last_hit_t < 3.0
         circle = self._target_circle(obs)
-        fighting = nearest is not None and (nearest_d < 55.0 or recently_hit)
+        # House bots share vision and hunt us: hiding silently just gets us found. Fight back at any real range.
+        fighting = nearest is not None and (nearest_d < 170.0 or recently_hit)
         goal, hold, mode = None, False, "go"
         if nearest is not None and not fighting:
             # Seen from range and not shot at: get out of its sight and stay quiet (no shooting).
@@ -361,7 +364,7 @@ class Bot:
             # In a close fight, orbit laterally (switching sides at irregular intervals) and keep our distance.
             dx, dy = x - nearest["pos"][0], y - nearest["pos"][1]
             d = max(1.0, math.hypot(dx, dy))
-            if d < 78:
+            if d < 120:
                 if obs["tick"] >= self.next_strafe_tick:
                     self.strafe_sign *= -1.0
                     self.next_strafe_tick = obs["tick"] + self.rng.randint(7, 16)
@@ -383,7 +386,7 @@ class Bot:
                     strength = urgency * (85 - d) / 85.0
                     move_x += (x - enemy["pos"][0]) / d * strength * 1.6
                     move_y += (y - enemy["pos"][1]) / d * strength * 1.6
-        allow_fire = fighting or (target is not None and target["kind"] == "npc" and npc_hit)
+        allow_fire = target is not None and (target["kind"] == "mech" or npc_hit)
 
         # Face the most immediate attacker when there is no worthwhile target.
         attacker_bearings = [e.get("bearing") for e in obs.get("events", [])
@@ -487,7 +490,7 @@ class Bot:
             in_range = d <= stats.get("range", 0)
             if kind == "gun":
                 # Preserve ammunition at long range; lead is still applied for any shot.
-                in_range = d <= min(stats.get("range", 230), 155 if target["kind"] == "mech" else 65)
+                in_range = d <= min(stats.get("range", 230), 175 if target["kind"] == "mech" else 65)
                 should_reload = (weapon.get("ammo", 12) <= 2 or
                                  (weapon.get("ammo", 12) <= 4 and not in_range))
                 if should_reload and weapon.get("reload", 0) <= 0:
