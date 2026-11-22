@@ -54,6 +54,7 @@ class Bot:
         self.last_hit_t = self.last_npc_hit_t = self.last_seen_t = -99.0
         self.last_dir = 0.0
         self.prog_pos, self.prog_tick = None, 0
+        self.retreat_goal, self.retreat_until = None, 0
 
     def _zone_goal(self, obs):
         """Use a changing off-center waypoint that remains safely inside the next circle."""
@@ -356,11 +357,27 @@ class Bot:
             drop = self._drop_goal(obs, me, enemies) if quiet else None
             if drop is not None and distance2(drop, (x, y)) < 70.0:
                 goal, hold, mode = drop, False, "drop"
+        # Hurt: break line of sight and stay out of it. HP regenerates 45/s after 5 s without damage,
+        # so a clean escape is worth more than trading shots at low HP.
+        retreating = False
+        if fighting and nearest is not None and self.cover.ok and me["hp"] < 0.6 * me["max_hp"]:
+            seen = self.cover.los(nearest["pos"][0], nearest["pos"][1], x, y)
+            if seen:
+                if self.retreat_goal is None or obs["tick"] >= self.retreat_until:
+                    self.retreat_goal = self.cover.concealed_from(
+                        nearest["pos"], (x, y), (circle[0][0], circle[0][1], circle[1]), self.rng)
+                    self.retreat_until = obs["tick"] + 15
+                if self.retreat_goal is not None:
+                    goal, hold, mode, retreating = self.retreat_goal, False, "sneak", True
+            elif nearest_d > 40.0 and not recently_hit:
+                goal, hold, mode, retreating = (x, y), True, "hold", True   # hidden: freeze and heal
+        else:
+            self.retreat_goal = None
         gx, gy = unit(goal[0] - x, goal[1] - y)
         move_x = move_y = 0.0
         if not hold:
             move_x, move_y = self._steer_to(me, goal, mode == "sneak")
-        if fighting and nearest is not None:
+        if fighting and nearest is not None and not (retreating and hold):
             # In a close fight, orbit laterally (switching sides at irregular intervals) and keep our distance.
             dx, dy = x - nearest["pos"][0], y - nearest["pos"][1]
             d = max(1.0, math.hypot(dx, dy))
@@ -387,6 +404,8 @@ class Bot:
                     move_x += (x - enemy["pos"][0]) / d * strength * 1.6
                     move_y += (y - enemy["pos"][1]) / d * strength * 1.6
         allow_fire = target is not None and (target["kind"] == "mech" or npc_hit)
+        if retreating and hold:
+            allow_fire = False        # shooting resets the heal timer
 
         # Face the most immediate attacker when there is no worthwhile target.
         attacker_bearings = [e.get("bearing") for e in obs.get("events", [])
